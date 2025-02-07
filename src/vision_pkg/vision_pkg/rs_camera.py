@@ -92,7 +92,6 @@ class CameraNode( Node ):
             # Collect Corner and Center Locations
             center = tuple(map(int, result[0].center))
 
-            cv.putText(np_image, "",center, cv.FONT_HERSHEY_SIMPLEX, 1, (50, 255, 40), 4)
             
             # Unpack Center Location
             center_x, center_y = center
@@ -107,9 +106,8 @@ class CameraNode( Node ):
             self.get_logger().info(f"[ DEBUG ] {center_x},{center_y}")
             if ( 0 <= center_x and center_x < depth_frame.get_width() ) and (0 <= center_y and center_y < depth_frame.get_height()):
                 distance_center = depth_frame.get_distance( int(center_x), int(center_y) )
-                self.get_logger().warn(f"Distance: {distance_center}")
-
-            
+                cv.putText(np_image, f"{distance_center:0.3f}", (center_x - 20, center_y - 20), cv.FONT_HERSHEY_SIMPLEX, 1, (255, 128, 40), 2)
+                # self.get_logger().warn(f"Distance: {distance_center}")
 
         # Generate Message
         rgb_msg = CompressedImage()

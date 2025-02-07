@@ -14,6 +14,15 @@
  *      topic_callback()
  *      joy_callback()
  *******************************************/
+
+ /* Standard CAN IDs    ID      Motor-Type
+  *     Left-Motor:     1       Brushless
+  *     Right-Motor:    2       Brushless
+  *     Left-Tilt:      3       Brushed?
+  *     Right-Tilt:     4       Brushed?
+  *     Tilt:           5       Burshed?
+  *     Vibrator:       6       Brushed?
+  *******************************************/
 class ControllerNode : public rclcpp::Node {
 public: 
     
