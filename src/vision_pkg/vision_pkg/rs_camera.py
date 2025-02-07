@@ -66,7 +66,6 @@ class CameraNode( Node ):
             self.get_logger().error(f"[ Camera.CALLBACK_TIMER ] Error: {e}")
             return
         
-        # video_frame = frames.get_depth_frame()
         video_frame = frames.get_color_frame()
         depth_frame = frames.get_depth_frame()
 
@@ -79,19 +78,29 @@ class CameraNode( Node ):
         np_image = cv.cvtColor( np.asanyarray(image) , cv.COLOR_BGR2RGB)
 
         #####################################
-        # TO-DO: Implement Depth Frame      #
+        # DONE: Implement Depth Frame      #
         #####################################
 
 
         #####################################
-        # TO-DO: IMU                        #
+        # DONE: IMU -- Needs documentation  #
         #####################################
-        # imu_frame = frames.get_motion_frame()
+        gyro_frame = frames.first_or_default(rs.stream.gyro)
+        accl_frame = frames.first_or_default(rs.stream.accel)
 
-        # if imu_frame != None:
-            # self.get_logger().warn(f"imu_frame collected")
+        if gyro_frame.is_motion_frame() : self.get_logger().warn("[ CALLBACK ] Collected Gyro Frame")
+        if accl_frame.is_motion_frame(): self.get_logger().warn("[ CALLBACK ] Collected Accel Frame")
 
-
+                
+        accl_data = accl_frame.as_motion_frame().get_motion_data()
+        gyro_data = gyro_frame.as_motion_frame().get_motion_data()
+        self.get_logger().info(f"""
+            Accel Frame:
+                X: {accl_data.x}
+                Y: {accl_data.y}
+                Z: {accl_data.z}
+            ------------------------
+        """)
         #####################################
 
         # Collect AprilTag Location
