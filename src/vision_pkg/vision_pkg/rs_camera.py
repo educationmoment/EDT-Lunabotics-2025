@@ -78,8 +78,9 @@ class CameraNode( Node ):
         image = video_frame.as_frame().get_data()
         np_image = cv.cvtColor( np.asanyarray(image) , cv.COLOR_BGR2RGB)
 
-        # TO-DO: Implement Depth Frame
-
+        #####################################
+        # TO-DO: Implement Depth Frame      #
+        #####################################
 
         # Collect AprilTag Location
         np_grayscale = cv.cvtColor( np.asanyarray(image) , cv.COLOR_BGR2GRAY )
@@ -121,19 +122,14 @@ class CameraNode( Node ):
         depth_msg.header.stamp = self.get_clock().now().to_msg()
         depth_msg.encoding = "16UC1"
 
-
-        # depth_msg.height = depth_frame.shape[0]
-        # depth_msg.width  = depth_frame.shape[1]
-
         # Pack Image Data
         rgb_msg.data = cv.imencode( ".jpg", np_image )[1].tobytes() # ChatGPT Suggested Fix
-        # depth_msg.data = depth_frame.tobytes()
 
         # Send Messages
         self.pub_rgb.publish(msg=rgb_msg)
         self.pub_depth.publish(msg=depth_msg)
 
-        self.get_logger().info("[ Camera.CALLBACK_TIMER ] Frames Collected")
+        # Frames Collected
         return
 
     ### CameraNode: Initiallizers       ###

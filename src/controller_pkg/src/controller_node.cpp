@@ -113,8 +113,6 @@ private:
             bumper_left  = msg->buttons[4],
             bumper_right = msg->buttons[5];
         
-        // RCLCPP_INFO(this->get_logger(), "[\033[104m\tAxis 1\tAxis 3\t\033[0m]");
-        // RCLCPP_INFO(this->get_logger(), "[\033[104m\t%0.3f\t%0.3f\t\033[0m]", axis1, axis3);
 
         // Scale Duty-Cycle (control.cpp example uses 0.05, use 0.05 and -0.05 as maximum/minimum limits)
         RCLCPP_INFO( this->get_logger(), "Axis 3: %0.3f", axis3);\
