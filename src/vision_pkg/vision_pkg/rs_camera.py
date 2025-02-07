@@ -82,6 +82,18 @@ class CameraNode( Node ):
         # TO-DO: Implement Depth Frame      #
         #####################################
 
+
+        #####################################
+        # TO-DO: IMU                        #
+        #####################################
+        # imu_frame = frames.get_motion_frame()
+
+        # if imu_frame != None:
+            # self.get_logger().warn(f"imu_frame collected")
+
+
+        #####################################
+
         # Collect AprilTag Location
         np_grayscale = cv.cvtColor( np.asanyarray(image) , cv.COLOR_BGR2GRAY )
         result = self.detector.detect(np_grayscale)
@@ -155,15 +167,22 @@ class CameraNode( Node ):
     # Initiallize Camera Pipeline
     def init_camera(self) -> None:
         self.get_logger().info("[ Camera.INIT_CAMERA ] Starting Camera")
+        self.get_logger().info("[ Camera.INIT_CAMERA ] Starting IMU")
 
-        # Initiallize Pipeline
-        config = rs.config()
-        config.enable_all_streams()
-        # config.enable_stream(rs.stream.any, 640, 480, rs.format.z16, 30)
-
+        # Initiallize Camera Pipeline
         self.pipeline = rs.pipeline()
+        config = rs.config()
+
+        # Select, Configure, and Enable Streams in Pipeline configuration
+        config.enable_stream(rs.stream.color, 640, 480, rs.format.rgb8, 30)
+        config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16,  30)
+        config.enable_stream(rs.stream.accel)
+        config.enable_stream(rs.stream.gyro)
+
+        # Send Configuration to Pipeline
         self.pipeline.start( config )
         self.get_logger().info("[ Camera.INIT_CAMERA ] Camera Initiallized")
+        self.get_logger().info("[ Camera.INIT_CAMERA ] IMU Initiallized")
         return
 
     # Initiallize Compressed Image Publisher
