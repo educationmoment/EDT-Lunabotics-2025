@@ -61,7 +61,7 @@ It updates the system, installs the Robotics Operating System (ROS2 Humble), and
 A CAN interface should be immediately visible upon connecting the USB-to-CAN adapter. It may initially show as <strong>DOWN</strong>.
 Configure the CAN interface using</p>
 
-    sudo ip set can0 type can up bitrate 1000000
+    sudo ip link set can0 up type can bitrate 1000000
 
 <p>At this point, launch the robot using</p>
 
