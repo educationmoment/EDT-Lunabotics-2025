@@ -12,7 +12,7 @@
 #include "sensor_msgs/msg/laser_scan.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
 
-// Include SparkMax and service definitions from interfaces
+// include SparkMax and service definitions from interfaces
 #include "SparkMax.hpp"
 #include "interfaces_pkg/srv/depositing_request.hpp"
 #include "interfaces_pkg/srv/excavation_request.hpp"
