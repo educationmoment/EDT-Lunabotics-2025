@@ -27,7 +27,7 @@ using namespace std::chrono_literals;
 
 static constexpr double MAX_VELOCITY = 18.0;  // maximum allowed velocity
 
-// Updated state machine enumeration.
+// updated the states of the navagation state; it shall be named AutonomousState (mrrrrrrrrrow)
 enum class AutonomousState {
   SPIN_LOG_ZONES,      // Spin to log excavation (digging) and dumping (deposit) coordinates.
   SPIN_FOR_TAG1,       // Spin while searching for April Tag 1 (should be behind the robot).
