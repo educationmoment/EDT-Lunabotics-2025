@@ -12,9 +12,10 @@
 #include "sensor_msgs/msg/laser_scan.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
 
-// Include SparkMax and service definitions from controller_pkg
-#include "controller_pkg/SparkMax.hpp"
-#include "controller_pkg/srv/depositing_request.hpp"
+// Include SparkMax and service definitions from interfaces
+#include "SparkMax.hpp"
+#include "interfaces_pkg/srv/depositing_request.hpp"
+#include "interfaces_pkg/srv/excavation_request.hpp"
 
 // Include camera node from vision_pkg
 #include "vision_pkg/rs_camera_node.hpp"
@@ -26,12 +27,17 @@ using namespace std::chrono_literals;
 
 static constexpr double MAX_VELOCITY = 18.0;  // maximum allowed velocity
 
+// Updated state machine enumeration.
 enum class AutonomousState {
-  SPIN_LOG_COORDINATES,  // spin in place and log coordinates for digging & deposit locations.
-  NAVIGATE_TO_DIGGING,   // navigate toward the logged digging location.
-  DIGGING,               // DO DA the digging routine.
-  NAVIGATE_TO_DEPOSIT,   // goto  the logged deposit location.
-  FINISHED               // halt all motion.
+  SPIN_LOG_ZONES,      // Spin to log excavation (digging) and dumping (deposit) coordinates.
+  SPIN_FOR_TAG1,       // Spin while searching for April Tag 1 (should be behind the robot).
+  SPIN_90_TAG1,        // Perform a 90° right turn after Tag1 detection.
+  SPIN_FOR_TAG2,       // Spin while searching for April Tag 2 (should appear on the right).
+  SPIN_90_TAG2,        // Perform a 90° right turn after Tag2 detection (robot will then face forward).
+  NAVIGATE_TO_DIGGING, // navigate toward the logged digging location
+  DIGGING,             // DO DA the digging routine
+  NAVIGATE_TO_DEPOSIT, // goto  the logged deposit location
+  FINISHED             // halt all motion.
 };
 
 // helper: clamp a velocity value between -MAX_VELOCITY and MAX_VELOCITY. -> i think this makes sense idk im fucking fried its 2:42 am please god save me
@@ -45,11 +51,12 @@ class AutonomousNode : public rclcpp::Node, public std::enable_shared_from_this<
 public:
   AutonomousNode()
   : Node("autonomous_node"),
-    state_(AutonomousState::SPIN_LOG_COORDINATES),
+    state_(AutonomousState::SPIN_LOG_ZONES),
     obstacle_detected_(false),
     obstacle_distance_(std::numeric_limits<float>::infinity()),
     digging_pose_logged_(false),
-    deposit_pose_logged_(false)
+    deposit_pose_logged_(false),
+    april_tag_detected_(false)
   {
     // here we create the drive motor objects
     left_motor_ = std::make_shared<SparkMax>("can0", 1);
@@ -62,20 +69,25 @@ public:
       "/scan", 10,
       std::bind(&AutonomousNode::obstacle_callback, this, std::placeholders::_1));
 
-    // localization sub
+    // localization sub (localization pose topic)
     pose_sub_ = this->create_subscription<geometry_msgs::msg::PoseStamped>(
       "/localization/pose", 10,
       std::bind(&AutonomousNode::pose_callback, this, std::placeholders::_1));
 
-    // 100ms control timer for main function
+    // added apriltag sub topic (publishes Bool when an April tag is detected)
+    apriltag_sub_ = this->create_subscription<std_msgs::msg::Bool>(
+      "/localization/apriltag", 10,
+      std::bind(&AutonomousNode::apriltag_callback, this, std::placeholders::_1));
+
+    // 100ms control timer for main function.
     timer_ = this->create_wall_timer(100ms, std::bind(&AutonomousNode::control_loop, this));
 
-    // create service clients for excavation and depositing nodes from controller_pkg
-    excavation_client_ = this->create_client<controller_pkg::srv::DepositingRequest>("excavation_service");
-    depositing_client_ = this->create_client<controller_pkg::srv::DepositingRequest>("depositing_service");
+    // create service clients for excavation and depositing nodes from interfaces_pkg
+    excavation_client_ = this->create_client<interfaces_pkg::srv::DepositingRequest>("excavation_service");
+    depositing_client_ = this->create_client<interfaces_pkg::srv::DepositingRequest>("depositing_service");
 
     spin_start_time_ = this->now();
-    RCLCPP_INFO(this->get_logger(), "Autonomous node started (SPIN_LOG_COORDINATES).");
+    RCLCPP_INFO(this->get_logger(), "Autonomous node started in SPIN_LOG_ZONES state.");
   }
 
 private:
@@ -101,11 +113,18 @@ private:
     }
   }
 
-  // update current pose from loclization
+  // update current pose from loclization via pose callback
   void pose_callback(const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
     current_pose_ = *msg;
   }
-  //zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz
+
+  // april tag callback.
+  void apriltag_callback(const std_msgs::msg::Bool::SharedPtr msg) {
+    if (msg->data) {
+      april_tag_detected_ = true;
+      RCLCPP_INFO(this->get_logger(), "April Tag detected in current state.");
+    }
+  }
 
   // helper: compute Euclidean distance between two poses which is in 2d, i think this makes sense, i saw itin a cool math book i read one time
   double compute_distance(const geometry_msgs::msg::PoseStamped &pose1,
@@ -114,6 +133,7 @@ private:
     double dy = pose2.pose.position.y - pose1.pose.position.y;
     return std::sqrt(dx * dx + dy * dy);
   }
+
   // helper: compute heading from current to target in rAdians 
   double compute_heading(const geometry_msgs::msg::PoseStamped &current,
                          const geometry_msgs::msg::PoseStamped &target) {
@@ -147,10 +167,12 @@ private:
 
     try {
       switch (state_) {
-        case AutonomousState::SPIN_LOG_COORDINATES: {
-          // spin in place using opposite velocities and log coordinates.
+
+          // spin in place using opposite velocities and log coordinates for excvation/depositng
+          case AutonomousState::SPIN_LOG_ZONES: {
           left_motor_->Heartbeat();
           right_motor_->Heartbeat();
+          // spinnny in place.
           left_motor_->SetVelocity(clamp_velocity(-0.2 * MAX_VELOCITY));
           right_motor_->SetVelocity(clamp_velocity(0.2 * MAX_VELOCITY));
 
@@ -161,7 +183,7 @@ private:
           if (elapsed > 5.0 && !digging_pose_logged_ && current_pose_.header.stamp.sec != 0) {
             digging_pose_ = current_pose_;
             digging_pose_logged_ = true;
-            RCLCPP_INFO(this->get_logger(), "Logged digging coordinates: [%.2f, %.2f]",
+            RCLCPP_INFO(this->get_logger(), "Logged excavation coordinates: [%.2f, %.2f]",
                         digging_pose_.pose.position.x, digging_pose_.pose.position.y);
           }
           // it will take 10 seconds, log the current pose as the deposit location.
@@ -171,17 +193,94 @@ private:
             RCLCPP_INFO(this->get_logger(), "Logged deposit coordinates: [%.2f, %.2f]",
                         deposit_pose_.pose.position.x, deposit_pose_.pose.position.y);
           }
-          // both are logged, lets move dis bitch to da digging location!!!!
+          // once both coordinates are logged, lets move to searching for april tags
           if (digging_pose_logged_ && deposit_pose_logged_) {
-            RCLCPP_INFO(this->get_logger(), "Coordinates logged. Transitioning to NAVIGATE_TO_DIGGING.");
+            RCLCPP_INFO(this->get_logger(), "Coordinates logged. Transitioning to SPIN_FOR_TAG1.");
+            // reset the flag and timer
+            spin_start_time_ = this->now();
+            state_ = AutonomousState::SPIN_FOR_TAG1;
+          }
+          break;
+        }
+        // spin search for tag1
+        case AutonomousState::SPIN_FOR_TAG1: {
+          left_motor_->Heartbeat();
+          right_motor_->Heartbeat();
+          left_motor_->SetVelocity(clamp_velocity(-0.2 * MAX_VELOCITY));
+          right_motor_->SetVelocity(clamp_velocity(0.2 * MAX_VELOCITY));
+          if (april_tag_detected_) {
+            double current_yaw = get_yaw(current_pose_);
+            spin_start_yaw_ = current_yaw;
+            // 90 degree right turn -> substract pi/2
+            target_yaw_ = current_yaw - (M_PI / 2);
+            if (target_yaw_ > M_PI) target_yaw_ -= 2 * M_PI;
+            if (target_yaw_ < -M_PI) target_yaw_ += 2 * M_PI;
+            RCLCPP_INFO(this->get_logger(), "Tag1 detected. Initiating 90° right turn: current_yaw=%.2f, target_yaw=%.2f", current_yaw, target_yaw_);
+            april_tag_detected_ = false;
+            state_ = AutonomousState::SPIN_90_TAG1;
+          }
+          break;
+        }
+        // 90 turn for tag1
+        case AutonomousState::SPIN_90_TAG1: {
+          left_motor_->Heartbeat();
+          right_motor_->Heartbeat();
+          double current_yaw = get_yaw(current_pose_);
+          double error = target_yaw_ - current_yaw;
+          while (error > M_PI) error -= 2 * M_PI;
+          while (error < -M_PI) error += 2 * M_PI;
+          if (std::fabs(error) < 0.1) {
+            RCLCPP_INFO(this->get_logger(), "Completed 90° right turn for Tag1.");
+            // lets start looking for tag2 
+            spin_start_time_ = this->now(); // reset timer
+            state_ = AutonomousState::SPIN_FOR_TAG2;
+          } else {
+            left_motor_->SetVelocity(clamp_velocity(-0.2 * MAX_VELOCITY));
+            right_motor_->SetVelocity(clamp_velocity(0.2 * MAX_VELOCITY));
+          }
+          break;
+        }
+        // spin to search for tag2 (apirltag2)
+        case AutonomousState::SPIN_FOR_TAG2: {
+          left_motor_->Heartbeat();
+          right_motor_->Heartbeat();
+          left_motor_->SetVelocity(clamp_velocity(-0.2 * MAX_VELOCITY));
+          right_motor_->SetVelocity(clamp_velocity(0.2 * MAX_VELOCITY));
+          if (april_tag_detected_) {
+            double current_yaw = get_yaw(current_pose_);
+            spin_start_yaw_ = current_yaw;
+            // another 90 degree right turn: subtract pi/2
+            target_yaw_ = current_yaw - (M_PI / 2);
+            if (target_yaw_ > M_PI) target_yaw_ -= 2 * M_PI;
+            if (target_yaw_ < -M_PI) target_yaw_ += 2 * M_PI;
+            RCLCPP_INFO(this->get_logger(), "Tag2 detected. Initiating second 90° right turn: current_yaw=%.2f, target_yaw=%.2f", current_yaw, target_yaw_);
+            april_tag_detected_ = false;
+            state_ = AutonomousState::SPIN_90_TAG2;
+          }
+          break;
+        }
+        // 2nd 90 degree turn
+        case AutonomousState::SPIN_90_TAG2: {
+          left_motor_->Heartbeat();
+          right_motor_->Heartbeat();
+          double current_yaw = get_yaw(current_pose_);
+          double error = target_yaw_ - current_yaw;
+          while (error > M_PI) error -= 2 * M_PI;
+          while (error < -M_PI) error += 2 * M_PI;
+          if (std::fabs(error) < 0.1) {
+            RCLCPP_INFO(this->get_logger(), "Completed second 90° right turn. Facing forward. Transitioning to NAVIGATE_TO_DIGGING.");
+            spin_start_time_ = this->now(); // reset timer for navigation logging
             state_ = AutonomousState::NAVIGATE_TO_DIGGING;
+          } else {
+            left_motor_->SetVelocity(clamp_velocity(-0.2 * MAX_VELOCITY));
+            right_motor_->SetVelocity(clamp_velocity(0.2 * MAX_VELOCITY));
           }
           break;
         }
         case AutonomousState::NAVIGATE_TO_DIGGING: {
           // navagation logic toward the digging location.
           double distance = compute_distance(current_pose_, digging_pose_);
-          RCLCPP_INFO(this->get_logger(), "Navigating to digging spot. Distance: %.2f", distance);
+          RCLCPP_INFO(this->get_logger(), "Navigating to excavation spot. Distance: %.2f", distance);
           if (distance < 0.5) {
             left_motor_->SetVelocity(0.0);
             right_motor_->SetVelocity(0.0);
@@ -206,19 +305,15 @@ private:
         }
         case AutonomousState::DIGGING: {
           // HALT! and execute the digging routine.
-          RCLCPP_INFO(this->get_logger(), "Executing digging routine.");
+          RCLCPP_INFO(this->get_logger(), "Executing excavation routine.");
           left_motor_->SetVelocity(0.0);
           right_motor_->SetVelocity(0.0);
           // call DA excavation service, AND PUT IT ON THE GRILL!!!!!!
           if (!excavation_client_->wait_for_service(5s)) {
             RCLCPP_ERROR(this->get_logger(), "Excavation service not available.");
           } else {
-            auto request = std::make_shared<controller_pkg::srv::DepositingRequest::Request>();
-            // here i repurposed start_depositing field for excavation routine. 
-            // i originally thought it was a boolean for starting the depositing routine, but it is actually for excavation.
-            // its fine, it works, at least it should
-            // dont worry about it
-            request->start_depositing = true;
+            auto request = std::make_shared<interfaces_pkg::srv::DepositingRequest::Request>();
+            request->start_depositing = true;  // repurpose field for excavation
             auto future_result = excavation_client_->async_send_request(request);
             if (rclcpp::spin_until_future_complete(shared_from_this(), future_result) ==
                 rclcpp::FutureReturnCode::SUCCESS)
@@ -245,11 +340,10 @@ private:
             left_motor_->SetVelocity(0.0);
             right_motor_->SetVelocity(0.0);
             RCLCPP_INFO(this->get_logger(), "Arrived at deposit location. Calling depositing service.");
-            // call the depositing service - > i removed the placeholders :3
             if (!depositing_client_->wait_for_service(5s)) {
               RCLCPP_ERROR(this->get_logger(), "Depositing service not available.");
             } else {
-              auto request = std::make_shared<controller_pkg::srv::DepositingRequest::Request>();
+              auto request = std::make_shared<interfaces_pkg::srv::DepositingRequest::Request>();
               request->start_depositing = true;
               auto future_result = depositing_client_->async_send_request(request);
               if (rclcpp::spin_until_future_complete(shared_from_this(), future_result) ==
@@ -314,14 +408,20 @@ private:
   bool digging_pose_logged_;
   bool deposit_pose_logged_;
 
+  // variables for handling aopril tag detection and turn.
+  bool april_tag_detected_ = false;
+  double spin_start_yaw_ = 0.0;
+  double target_yaw_ = 0.0;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr apriltag_sub_;
+
   // ROS2 objeczt
   rclcpp::TimerBase::SharedPtr timer_;
   rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr obstacle_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr pose_sub_;
 
   // service clients for excavtin / dpeositng
-  rclcpp::Client<controller_pkg::srv::DepositingRequest>::SharedPtr excavation_client_;
-  rclcpp::Client<controller_pkg::srv::DepositingRequest>::SharedPtr depositing_client_;
+  rclcpp::Client<interfaces_pkg::srv::DepositingRequest>::SharedPtr excavation_client_;
+  rclcpp::Client<interfaces_pkg::srv::DepositingRequest>::SharedPtr depositing_client_;
 
   // motor/actuator objects
   std::shared_ptr<SparkMax> left_motor_;
